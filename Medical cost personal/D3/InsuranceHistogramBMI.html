@@ -32,11 +32,11 @@ var margin = {top: 10, right: 30, bottom: 30, left: 30},
 //var height = 476;
 
 var x = d3.scaleLinear()
-    .domain(d3.extent(ageArray)).nice()
+    .domain(d3.extent(bmiArray)).nice()
     .range([0, width])
 //var x = d3.scaleLinear().domain([30, 110]).range([0, width]);
 
-var bins = d3.histogram().domain(x.domain()).thresholds(x.ticks(20))(ageArray);
+var bins = d3.histogram().domain(x.domain()).thresholds(x.ticks(20))(bmiArray);
 
 var max = d3.max(bins, function(d) {
   return d.y;
@@ -59,7 +59,7 @@ var bars = vis.selectAll("g.bar")
   .enter().append("g")
   .attr("class", "bar")
   .attr("transform", function(d) {
-    return "translate(" + x(d.x0) + "," + y(d.length+5) + ")";
+    return "translate(" + x(d.x0) + "," + y(d.length+7) + ")";
   });
 
 bars.append("rect")
