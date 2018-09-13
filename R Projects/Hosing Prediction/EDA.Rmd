@@ -1,0 +1,275 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+plot(cars)
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+
+
+
+```{r}
+setwd("C://Users//conne//Desktop//DataMining")
+getwd()
+
+# read in OrderBreakdown.txt file into R as a data.frame named "data"
+train <- read.table(file="train.csv", header=T, sep=",")
+test <- read.table(file="test.csv", header=T, sep=",")
+
+```
+```{r}
+#head(train,5)
+#names(train)
+str(train)
+```
+
+```{r}
+
+```
+
+```{r}
+trainFirst20 = train[,(1:20)]
+train21to40 = train[,(21:40)] 
+train41to60 = train[,(41:60)] 
+train61to81 = train[,(61:81)] 
+
+```
+
+```{r}
+names(trainFirst20)
+names(train21to40)
+names(train41to60)
+names(train61to81)
+```
+
+## Adding back the output varible so that each subdivision of dataset has Y using which correlation can be found
+
+```{r}
+trainFirst20["SalePrice"] = train$SalePrice
+train21to40["SalePrice"] = train$SalePrice
+train41to60["SalePrice"] = train$SalePrice
+train61to81["SalePrice"] = train$SalePrice
+
+```
+
+```{r}
+str()
+```
+
+## Removing two unused column from the dataset
+## X and Id are auto generated and is not required
+
+```{r}
+str(trainFirst20)
+#trainFirst20$X = NULL
+#trainFirst20$Id = NULL
+```
+## Plotting boxplot for features that are numeric, to visualize the outliers
+```{r}
+columnNames = names(train)
+print(columnNames)
+
+#Initializing the separate dataframe to NULL so that in case of any error they don't keep previous records
+trainNumeric = NULL
+trainFactor = NULL
+#Iterating over column names and putting it into appropriate basket 
+for (name in columnNames){
+  print(is.null(trainFactor))
+  if('factor' == toString(class(train[[name]]))){
+    if(is.null(trainFactor)){
+     trainFactor = train[name]
+    }
+    trainFactor[name] = train[[name]]
+  } else{
+    if(is.null(trainNumeric)){
+     trainNumeric = train[name]
+    }
+    trainNumeric[name] = train[[name]]
+  }
+}
+```
+
+```{r}
+str(trainNumeric)
+str(trainFactor)
+```
+
+##First going through the numeric data frame and seeing which attributes looks relevant
+
+```{r}
+require(corrplot)
+numeric10 = trainNumeric[,(1:10)]
+numeric20 = trainNumeric[,(11:20)]
+numeric30 = trainNumeric[,(21:30)]
+numeric40 = trainNumeric[,(31:39)]
+
+numeric10['SalePrice'] = trainNumeric['SalePrice']
+numeric20['SalePrice'] = trainNumeric['SalePrice']
+numeric30['SalePrice'] = trainNumeric['SalePrice']
+#numeric40 = trainNumeric[,(31:38)]
+
+#numeric10 = as.matrix(numeric10)
+#numeric20 = as.matrix(numeric20)
+#numeric30 = as.matrix(numeric30)
+#numeric40 = as.matrix(numeric40)
+numeric10$X = NULL
+numeric10$Id = NULL
+
+corrplot(cor(numeric10))
+corrplot(cor(numeric20))
+corrplot(cor(numeric30))
+corrplot(cor(numeric40))
+```
+##There are two types of missing data:
+
+    MCAR: missing completely at random. This is the desirable scenario in case of missing data.
+    MNAR: missing not at random. Missing not at random data is a more serious issue and in this case it might be wise to check the data gathering process further and try to understand why the information is missing. For instance, if most of the people in a survey did not answer a certain question, why did they do that? Was the question unclear?
+
+Assuming data is MCAR, too much missing data can be a problem too. Usually a safe maximum threshold is 5% of the total for large datasets. If missing data for a certain feature or sample is more than 5% then you probably should leave that feature or sample out. We therefore check for features (columns) and samples (rows) where more than 5% of the data is missing using a simple function
+https://datascienceplus.com/imputing-missing-data-with-r-mice-package/
+```{r}
+pMiss <- function(x){sum(is.na(x))/length(x)*100}
+apply(numeric10,2,pMiss)
+print('######')
+apply(numeric20,2,pMiss)
+print('######')
+apply(numeric30,2,pMiss)
+print('######')
+apply(numeric40,2,pMiss)
+#apply(numeric10,1,pMiss)
+```
+## Dropping the variable LotFrontage and GarageYrBlt also omitting the rows with values NA since they form only 0.54%
+```{r}
+
+numeric10$LotFrontage = NULL
+dim(numeric10)
+row.has.na <- apply(numeric10, 1, function(x){any(is.na(x))})
+sum(row.has.na)
+numeric10 <- numeric10[!row.has.na,]
+dim(numeric10)
+
+
+numeric30$GarageYrBlt = NULL
+dim(numeric30)
+row.has.na <- apply(numeric30, 1, function(x){any(is.na(x))})
+sum(row.has.na)
+numeric30 <- numeric30[!row.has.na,]
+dim(numeric30)
+```
+
+```{r}
+corrplot(cor(numeric10))
+corrplot(cor(numeric30))
+```
+#Since OverallCond and MSSubClass has least correlation we will drop that  
+```{r}
+numeric10$MSSubClass = NULL
+numeric10$OverallCond = NULL
+```
+
+#Seeing if there is still any missing data with in the first dataset
+
+```{r}
+install.packages("VIM")
+library(VIM)
+aggr_plot <- aggr(numeric10, col=c('navyblue','red'), numbers=TRUE, sortVars=TRUE, labels=names(numeric10), cex.axis=.7, gap=3, ylab=c("Histogram of missing data in numeric10","Pattern"))
+aggr_plot <- aggr(numeric20, col=c('navyblue','red'), numbers=TRUE, sortVars=TRUE, labels=names(numeric20), cex.axis=.7, gap=3, ylab=c("Histogram of missing data in numeric20","Pattern"))
+aggr_plot <- aggr(numeric30, col=c('navyblue','red'), numbers=TRUE, sortVars=TRUE, labels=names(numeric30), cex.axis=.7, gap=3, ylab=c("Histogram of missing data in numeric30","Pattern"))
+aggr_plot <- aggr(numeric40, col=c('navyblue','red'), numbers=TRUE, sortVars=TRUE, labels=names(numeric40), cex.axis=.7, gap=3, ylab=c("Histogram of missing data in numeric 40","Pattern"))
+
+```
+
+```{r}
+aggr_plot <- aggr(numeric20, col=c('navyblue','red'), numbers=TRUE, sortVars=TRUE, labels=names(numeric20), cex.axis=.7, gap=3, ylab=c("Histogram of missing data","Pattern"))
+```
+
+#Setting features in numeric20 to NULL as they are very less in correlation
+```{r}
+names(numeric20)
+numeric20$BsmtFinSF2 = NULL
+numeric20$LowQualFinSF = NULL
+numeric20$BsmtHalfBath = NULL
+names(numeric20)
+
+
+names(numeric30)
+numeric30$BedroomAbvGr = NULL
+numeric30$KitchenAbvGr = NULL
+names(numeric30)
+
+names(numeric40)
+numeric40 = numeric40[,c('OpenPorchSF','EnclosedPorch')]
+#numeric30$KitchenAbvGr = NULL
+names(numeric40)
+
+```
+```{r}
+dim(numeric10)[2]
++dim(numeric20)[2]
++dim(numeric30)[2]
++dim(numeric40)[2]
+```
+
+```{r}
+correlationMatrix <- cor(numeric10)
+highlyCorrelated <- findCorrelation(correlationMatrix, cutoff=0.5)
+```
+
+```{r}
+#install.packages('earth')
+library(earth)
+model <- earth(SalePrice ~ ., data=numeric10) # build model
+ev <- evimp (model)
+print(ev)
+```
+
+```{r}
+plot(ev)
+```
+
+```{r}
+summary(trainFactor)
+```
+```{r}
+pMiss <- function(x){sum(is.na(x))/length(x)*100}
+apply(trainFactor,2,pMiss)
+```
+##Dropping features where NA are more than 5%
+```{r}
+trainFactor$Alley = NULL
+trainFactor$FireplaceQu = NULL
+trainFactor$GarageType = NULL
+trainFactor$GarageFinish = NULL
+trainFactor$GarageQual = NULL
+trainFactor$GarageType = NULL 
+trainFactor$MiscFeature = NULL
+trainFactor$Fence =NULL
+trainFactor$PoolQC = NULL
+trainFactor$GarageCond = NULL
+
+```
+
+```{r}
+#numeric10$LotFrontage = NULL
+dim(trainFactor)
+row.has.na <- apply(trainFactor, 1, function(x){any(is.na(x))})
+sum(row.has.na)
+trainFactor <- trainFactor[!row.has.na,]
+dim(trainFactor)
+```
+
+```{r}
+head(trainFactor)
+```
+
