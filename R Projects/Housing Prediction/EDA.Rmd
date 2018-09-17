@@ -1,0 +1,336 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+
+##Setup
+Setting up the current working directory and importing data from CSV, both train and test set 
+Check the structure of data to see how many and what type of fields form the dataset
+```{r}
+setwd("C://Users//conne//Documents//Data Science//Profile//Git//R Projects//Housing Prediction")
+getwd()
+
+# read in OrderBreakdown.txt file into R as a data.frame named "data"
+train <- read.table(file="train.csv", header=T, sep=",")
+test <- read.table(file="test.csv", header=T, sep=",")
+
+```
+```{r}
+#head(train,5)
+#names(train)
+str(train)
+```
+
+## Dividing the dataset into numeric and factor
+Since we see that there are condidereable number of factor variables(39) and numeric variables(36). so we will separate out the two into two different datasets. post our analysis we will merge them into single dataframe  
+```{r}
+columnNames = names(train)
+print(columnNames)
+
+#Initializing the separate dataframe to NULL so that in case of any error they don't keep previous records
+trainNumeric = NULL
+trainFactor = NULL
+#Iterating over column names and putting it into appropriate basket 
+for (name in columnNames){
+  print(is.null(trainFactor))
+  if('factor' == toString(class(train[[name]]))){
+    if(is.null(trainFactor)){
+     trainFactor = train[name]
+    }
+    trainFactor[name] = train[[name]]
+  } else{
+    if(is.null(trainNumeric)){
+     trainNumeric = train[name]
+    }
+    trainNumeric[name] = train[[name]]
+  }
+}
+```
+
+## The dependent variable needs to be added back to the factor dataframe. since that will be used in checking the correlation
+
+Adding back the output varible so that each subdivision of dataset has Y using which correlation can be found
+
+
+
+```{r}
+trainFactor["SalePrice"] = train$SalePrice
+
+```
+
+
+
+## Removing two unused column from the dataset
+X and Id are auto generated and is not required
+verifying the structure of numeric dataframe so as to see if our operation of dropping the variables was successfull
+
+```{r}
+trainNumeric$X = NULL
+trainNumeric$Id = NULL
+str(trainNumeric)
+
+```
+
+
+##Now comes the part where we will impute the dataframe for the missing values
+There are two types of missing data:
+
+    MCAR: missing completely at random. This is the desirable scenario in case of missing data.
+    MNAR: missing not at random. Missing not at random data is a more serious issue and in this case it might be wise to check the data gathering process further and try to understand why the information is missing. For instance, if most of the people in a survey did not answer a certain question, why did they do that? Was the question unclear?
+
+Assuming data is MCAR, too much missing data can be a problem too. Usually a safe maximum threshold is 5% of the total for large datasets. If missing data for a certain feature or sample is more than 5% then you probably should leave that feature or sample out. We therefore check for features (columns) and samples (rows) where more than 5% of the data is missing using a simple function
+https://datascienceplus.com/imputing-missing-data-with-r-mice-package/
+
+The following fuction when used with apply gives the percentage of missing fields in each feature
+```{r}
+pMiss <- function(x){sum(is.na(x))/length(x)*100}
+apply(trainNumeric,2,pMiss)
+print('######')
+apply(trainFactor,2,pMiss)
+```
+#We see here that some of the variables have a lot of NA values, and in those cases it would rather be better to drop them instead of of imputing them all.
+We will drop features PoolQC, Fence , MiscFeature , FireplaceQu , Alley in trainFactor frame
+and in trainNumeric we will drop LotFrontage
+```{r}
+trainFactor$PoolQC = NULL
+trainFactor$Fence = NULL
+trainFactor$MiscFeature = NULL
+trainFactor$FireplaceQu = NULL
+trainFactor$Alley = NULL
+trainNumeric$LotFrontage = NULL
+
+```
+
+#Checking the values again so as to see that we didn't miss anything
+All the values for missing data is less than or around 5%
+```{r}
+pMiss <- function(x){sum(is.na(x))/length(x)*100}
+apply(trainNumeric,2,pMiss)
+print('######')
+apply(trainFactor,2,pMiss)
+
+```
+#The above analysis can be done with VIM as well , it also gives us a plot to show the distribution of the missing values
+```{r}
+
+library(VIM)
+aggr_plot <- aggr(trainNumeric, col=c('navyblue','red'), numbers=TRUE, sortVars=TRUE, labels=names(trainNumeric), cex.axis=.7, gap=3, ylab=c("Histogram of missing data in trainNumeric","Pattern"))
+
+aggr_plot <- aggr(trainFactor, col=c('navyblue','red'), numbers=TRUE, sortVars=TRUE, labels=names(trainFactor), cex.axis=.7, gap=3, ylab=c("Histogram of missing data in trainFactor","Pattern"))
+
+```
+
+#Now that we know what the missing values are, we will use mice package to impute the missing fields. for this pmm method which is predictive mean matching will be used, we will generate 5 imputed subsets
+```{r}
+require(mice)
+imputer <- mice(trainNumeric,m=5,maxit=50,meth='pmm')
+summary(imputer)
+
+imputedtrainNumeric = complete(imputer, 1)
+
+pMiss <- function(x){sum(is.na(x))/length(x)*100}
+apply(imputedtrainNumeric,2,pMiss)
+```
+##Using polyreg to impute multi class categorical variable. we have reduced the number of iteration and number of multiple imputations to 2. since there are many features wuth missing data and having multiple iteration will render the results in slow manner
+
+```{r}
+require(mice)
+imputerF <- mice(trainFactor,m=2,maxit=2,meth='polyreg')
+summary(imputerF)
+
+```
+
+```{r}
+imputedtrainFactor = complete(imputerF, 1)
+
+pMiss <- function(x){sum(is.na(x))/length(x)*100}
+apply(imputedtrainFactor,2,pMiss)
+
+```
+
+
+#This method is to check if the total dimesion of the one hot encoded dataset doesn't exceed the number of rows.
+
+```{r}
+totalDim=0
+
+for (i in 1:(length(names(trainFactor))-1)){
+  #print(length(levels(trainFactor[,i])))
+  totalDim=totalDim+length(levels(trainFactor[,i]))
+}
+print(totalDim)
+
+
+```
+#One hot encinding using fastDummies is done to convert categorical variable into numeric
+**Also Removing all the actual columns since they have now been converted to dummy variable
+```{r}
+dummyimputedtrainFactor <- fastDummies::dummy_cols(imputedtrainFactor, remove_first_dummy = TRUE)
+#results <- fastDummies::dummy_cols(fastDummies_example, remove_first_dummy = TRUE)
+print(paste('dimension of imputedtrainFactor = ' ,dim(imputedtrainFactor)))
+print(paste('dimension of dummyimputedtrainFactor = ' ,dim(dummyimputedtrainFactor)))
+
+for (name in names(imputedtrainFactor)){
+  
+  dummyimputedtrainFactor[name] = NULL
+}
+print(paste('dim of dummyimputedtrainFactor = ' ,dim(dummyimputedtrainFactor)))
+```
+
+#Since the number of features after one hot encoding is 196. it will not be possible to visualize them together, for that reason let's first filter out the features that are at least 0.5 in correlation value
+
+```{r}
+dummyimputedtrainFactor["SalePrice"] = train$SalePrice
+highCorrVect = c()
+correlationsFactor = cor(dummyimputedtrainFactor)
+for (i in colnames(correlationsFactor)){
+  for (j in colnames(correlationsFactor)){
+    
+      if ( abs(correlationsFactor[i,j]) > 0.5 & i != j ) {
+       highCorrVect =  c(highCorrVect,cbind(i, "-" , j , ": " , correlationsFactor[i,j]))
+        print(paste(i, "-" , j, ": ", correlationsFactor[i,j]))
+      }
+    
+  }
+}
+
+```
+
+
+```{r}
+i=0
+j=0
+print(paste(i,j))
+highCorrVectNum = c()
+correlationsNumeric = cor(imputedtrainNumeric)
+for (i in colnames(correlationsNumeric)){
+  for (j in colnames(correlationsNumeric)){
+    
+      if ( abs(correlationsNumeric[i,j]) > 0.5 & i != j ) {
+       highCorrVectNum =  c(correlationsNumeric,cbind(i, "-" , j , ": " , correlationsNumeric[i,j]))
+        print(paste(i, "-" , j, ": ", correlationsNumeric[i,j]))
+      }
+    
+  }
+}
+
+```
+
+```{r}
+#install.packages('earth')
+library(earth)
+model <- earth(SalePrice ~ ., data=dummyimputedtrainFactor) # build model
+ev <- evimp (model)
+print(ev)
+plot(ev)
+```
+
+
+```{r}
+#install.packages('earth')
+library(earth)
+modelN <- earth(SalePrice ~ ., data=imputedtrainNumeric) # build model
+evN <- evimp (modelN)
+print(evN)
+plot(evN)
+```
+
+
+#Selected features that has correaltion of above 0.5 are
+"SalePrice - OverallQual :  0.790981600583805"
+"SalePrice - YearBuilt :  0.522897332879497"
+"SalePrice - YearRemodAdd :  0.507100967111386"
+"SalePrice - TotalBsmtSF :  0.613580551559196"
+"SalePrice - X1stFlrSF :  0.605852184691915"
+"SalePrice - GrLivArea :  0.708624477612652"
+"SalePrice - FullBath :  0.560663762748446"
+"SalePrice - TotRmsAbvGrd :  0.533723155582028"
+"SalePrice - GarageYrBlt :  0.511868086625572"
+"SalePrice - GarageCars :  0.640409197258352"
+"SalePrice - GarageArea :  0.623431438918362"
+and 
+"SalePrice - ExterQual_TA :  -0.589043523409759"
+"SalePrice - BsmtQual_Ex :  0.553104847008939"
+"SalePrice - KitchenQual_TA :  -0.519297853654885"
+"SalePrice - KitchenQual_Ex :  0.504093675905297"
+
+using earth variable importance
+for numeric features
+BsmtFinSF1 , X2ndFlrSF, OverallCond, LotArea, BedroomAbvGr
+and for factors
+ExterQual_TA ,BsmtQual_Ex,Neighborhood_NoRidge,KitchenQual_Ex ,BsmtExposure_Gd,Neighborhood_Crawfor  
+
+
+This features will be incorporated in final model
+
+
+
+```{r}
+modeldata = imputedtrainNumeric[,c('OverallQual','YearBuilt','YearRemodAdd','TotalBsmtSF','X1stFlrSF','GrLivArea','FullBath','TotRmsAbvGrd','GarageYrBlt','GarageCars','GarageArea','BsmtFinSF1' , 'X2ndFlrSF', 'OverallCond', 'LotArea', 'BedroomAbvGr','SalePrice')]
+
+
+modeldata = cbind(modeldata,dummyimputedtrainFactor[,c('ExterQual_TA','BsmtQual_Ex','KitchenQual_TA','KitchenQual_Ex', 'Neighborhood_NoRidge' , 'BsmtExposure_Gd', 'Neighborhood_Crawfor')])
+
+```
+
+#Splitting the data into train set and validation set
+
+```{r}
+trainSet <- sample(nrow(modeldata), 0.8*nrow(modeldata), replace = FALSE)
+TrainingSet <- modeldata[trainSet,]
+ValidationSet <- modeldata[-trainSet,]
+summary(TrainingSet)
+summary(ValidationSet)
+
+```
+
+
+```{r}
+require(randomForest)
+# Create a Random Forest model with default parameters
+model1 <- randomForest(SalePrice ~ ., data = TrainingSet, ntree = 500, mtry = 10, importance = TRUE)
+model1
+
+```
+
+
+
+```{r}
+plot(model1)
+which.min(model2$mse)
+```
+```{r}
+pred_randomForest <- predict(model1, ValidationSet)
+head(pred_randomForest)
+```
+```{r}
+sqrt(model1$mse[which.min(model1$mse)])
+```
+#https://uc-r.github.io/random_forests
+```{r}
+require(ggplot2)
+#plot( c(ValidationSet$SalePrice,pred_randomForest))
+ggplot(data=TrainingSet) + geom_density(aes(x = SalePrice), fill="blue")
+```
+
+```{r}
+require(Metrics)
+rmsle(ValidationSet$SalePrice, pred_randomForest)
+```
+
+```{r}
+
+```
+

@@ -1,0 +1,429 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+
+##Setup
+Setting up the current working directory and importing data from CSV, both train and test set 
+Check the structure of data to see how many and what type of fields form the dataset
+```{r}
+setwd("C://Users//conne//Documents//Data Science//Profile//Git//R Projects//Housing Prediction")
+getwd()
+
+# read in OrderBreakdown.txt file into R as a data.frame named "data"
+train <- read.table(file="train.csv", header=T, sep=",")
+test <- read.table(file="test.csv", header=T, sep=",")
+
+```
+```{r}
+#head(train,5)
+#names(train)
+str(train)
+```
+
+## Dividing the dataset into numeric and factor
+Since we see that there are condidereable number of factor variables(39) and numeric variables(36). so we will separate out the two into two different datasets. post our analysis we will merge them into single dataframe  
+```{r}
+columnNames = names(train)
+print(columnNames)
+
+#Initializing the separate dataframe to NULL so that in case of any error they don't keep previous records
+trainNumeric = NULL
+trainFactor = NULL
+#Iterating over column names and putting it into appropriate basket 
+for (name in columnNames){
+  print(is.null(trainFactor))
+  if('factor' == toString(class(train[[name]]))){
+    if(is.null(trainFactor)){
+     trainFactor = train[name]
+    }
+    trainFactor[name] = train[[name]]
+  } else{
+    if(is.null(trainNumeric)){
+     trainNumeric = train[name]
+    }
+    trainNumeric[name] = train[[name]]
+  }
+}
+```
+
+
+
+
+
+## Removing two unused column from the dataset
+X and Id are auto generated and is not required
+verifying the structure of numeric dataframe so as to see if our operation of dropping the variables was successfull
+
+```{r}
+trainNumeric$X = NULL
+trainNumeric$Id = NULL
+str(trainNumeric)
+
+```
+
+
+##Now comes the part where we will impute the dataframe for the missing values
+There are two types of missing data:
+
+    MCAR: missing completely at random. This is the desirable scenario in case of missing data.
+    MNAR: missing not at random. Missing not at random data is a more serious issue and in this case it might be wise to check the data gathering process further and try to understand why the information is missing. For instance, if most of the people in a survey did not answer a certain question, why did they do that? Was the question unclear?
+
+Assuming data is MCAR, too much missing data can be a problem too. Usually a safe maximum threshold is 5% of the total for large datasets. If missing data for a certain feature or sample is more than 5% then you probably should leave that feature or sample out. We therefore check for features (columns) and samples (rows) where more than 5% of the data is missing using a simple function
+https://datascienceplus.com/imputing-missing-data-with-r-mice-package/
+
+The following fuction when used with apply gives the percentage of missing fields in each feature
+```{r}
+pMiss <- function(x){sum(is.na(x))/length(x)*100}
+apply(trainNumeric,2,pMiss)
+print('######')
+apply(trainFactor,2,pMiss)
+```
+#We see here that some of the variables have a lot of NA values, and in those cases it would rather be better to drop them instead of of imputing them all.
+We will drop features PoolQC, Fence , MiscFeature , FireplaceQu , Alley in trainFactor frame
+and in trainNumeric we will drop LotFrontage
+```{r}
+trainFactor$PoolQC = NULL
+trainFactor$Fence = NULL
+trainFactor$MiscFeature = NULL
+trainFactor$FireplaceQu = NULL
+trainFactor$Alley = NULL
+trainNumeric$LotFrontage = NULL
+
+```
+
+#Checking the values again so as to see that we didn't miss anything
+All the values for missing data is less than or around 5%
+```{r}
+pMiss <- function(x){sum(is.na(x))/length(x)*100}
+apply(trainNumeric,2,pMiss)
+print('######')
+apply(trainFactor,2,pMiss)
+
+```
+#The above analysis can be done with VIM as well , it also gives us a plot to show the distribution of the missing values
+```{r}
+
+library(VIM)
+aggr_plot <- aggr(trainNumeric, col=c('navyblue','red'), numbers=TRUE, sortVars=TRUE, labels=names(trainNumeric), cex.axis=.7, gap=3, ylab=c("Histogram of missing data in trainNumeric","Pattern"))
+
+aggr_plot <- aggr(trainFactor, col=c('navyblue','red'), numbers=TRUE, sortVars=TRUE, labels=names(trainFactor), cex.axis=.7, gap=3, ylab=c("Histogram of missing data in trainFactor","Pattern"))
+
+```
+
+#Now that we know what the missing values are, we will use mice package to impute the missing fields. for this pmm method which is predictive mean matching will be used, we will generate 5 imputed subsets
+```{r}
+require(mice)
+imputer <- mice(trainNumeric,m=5,maxit=50,meth='pmm')
+summary(imputer)
+
+imputedtrainNumeric = complete(imputer, 1)
+
+pMiss <- function(x){sum(is.na(x))/length(x)*100}
+apply(imputedtrainNumeric,2,pMiss)
+```
+##Using polyreg to impute multi class categorical variable. we have reduced the number of iteration and number of multiple imputations to 2. since there are many features wuth missing data and having multiple iteration will render the results in slow manner
+
+```{r}
+require(mice)
+imputerF <- mice(trainFactor,m=2,maxit=2,meth='polyreg')
+summary(imputerF)
+
+```
+
+```{r}
+imputedtrainFactor = complete(imputerF, 1)
+
+pMiss <- function(x){sum(is.na(x))/length(x)*100}
+apply(imputedtrainFactor,2,pMiss)
+
+```
+
+#One hot encinding using fastDummies is done to convert categorical variable into numeric
+**Also Removing all the actual columns since they have now been converted to dummy variable
+```{r}
+dummyimputedtrainFactor <- fastDummies::dummy_cols(imputedtrainFactor, remove_first_dummy = TRUE)
+#results <- fastDummies::dummy_cols(fastDummies_example, remove_first_dummy = TRUE)
+print(paste('dimension of imputedtrainFactor = ' ,dim(imputedtrainFactor)))
+print(paste('dimension of dummyimputedtrainFactor = ' ,dim(dummyimputedtrainFactor)))
+
+for (name in names(imputedtrainFactor)){
+  
+  dummyimputedtrainFactor[name] = NULL
+}
+print(paste('dim of dummyimputedtrainFactor = ' ,dim(dummyimputedtrainFactor)))
+```
+
+
+#Removing all the near zero variance predictor. The variables that remains nearly constant through out will not help predict anything
+```{r}
+library(caret)
+dim(dummyimputedtrainFactor) # dimension of dataset
+nzv <- nearZeroVar(dummyimputedtrainFactor[,1:ncol(dummyimputedtrainFactor)], uniqueCut=10) # identify columns that are "near zero"
+d_filtered <- dummyimputedtrainFactor[,1:ncol(dummyimputedtrainFactor)][, -nzv]            # remove those columns from your dataset
+dim(d_filtered) 
+
+
+dim(imputedtrainNumeric) # dimension of dataset
+nzv1 <- nearZeroVar(imputedtrainNumeric[,1:ncol(imputedtrainNumeric)], uniqueCut=10) # identify columns that are "near zero"
+d_filtered_numeric <- imputedtrainNumeric[,1:ncol(imputedtrainNumeric)][, -nzv1]            # remove those columns from your dataset
+dim(d_filtered_numeric) 
+
+```
+
+```{r}
+setdiff(names(imputedtrainNumeric), names(d_filtered_numeric))
+table(imputedtrainNumeric$BsmtFinSF2)
+```
+
+
+##Removing the variables that have correlation between them that is greater than 0.85. This is done so as to avoid the problem of VIF
+```{r}
+# calculate correlation matrix using Pearson's correlation formula
+descrCor <-  cor(d_filtered[,1:ncol(d_filtered)])                           # correlation matrix
+highCorr <- sum(abs(descrCor[upper.tri(descrCor)]) > .85) # number of Xs having a corr > some value
+summary(descrCor[upper.tri(descrCor)])  # summarize the correlations
+
+
+
+highlyCorDescr <- findCorrelation(descrCor, cutoff = 0.85)
+filteredDescr <- d_filtered[,1:ncol(d_filtered)][,-highlyCorDescr] # remove those specific columns from your dataset
+descrCor2 <- cor(filteredDescr)                  # calculate a new correlation matrix
+summary(descrCor2[upper.tri(descrCor2)])
+
+
+
+
+descrCorNum <-  cor(d_filtered_numeric[,1:(ncol(d_filtered_numeric)-1)])                           # correlation matrix
+highCorrNum <- sum(abs(descrCorNum[upper.tri(descrCorNum)]) > .85) # number of Xs having a corr > some value
+summary(descrCorNum[upper.tri(descrCorNum)])  # summarize the correlations
+
+
+
+highlyCorDescrNum <- findCorrelation(descrCorNum, cutoff = 0.85)
+filteredDescrNumeric <- d_filtered_numeric[,1:ncol(d_filtered_numeric)][,-highlyCorDescrNum] # remove those specific columns from your dataset
+descrCor2Numeric <- cor(filteredDescrNumeric)                  # calculate a new correlation matrix
+summary(descrCor2Numeric[upper.tri(descrCor2Numeric)])
+
+```
+#The next step includes seeing if there is some linear combinations of features that is present in the model
+```{r}
+library(caret)
+
+# create a column of 1s. This will help identify all the right linear combos
+filteredDescr <- cbind(rep(1, nrow(filteredDescr)), filteredDescr[2:ncol(filteredDescr)])
+names(filteredDescr)[1] <- "ones"
+
+# identify the columns that are linear combos
+comboInfo <- findLinearCombos(filteredDescr)
+comboInfo
+
+#filteredDescr[,'ones']=NULL
+
+# create a column of 1s. This will help identify all the right linear combos
+filteredDescrNumeric <- cbind(rep(1, nrow(filteredDescrNumeric)), filteredDescrNumeric[2:ncol(filteredDescrNumeric)])
+names(filteredDescrNumeric)[1] <- "ones"
+
+# identify the columns that are linear combos
+comboInfo <- findLinearCombos(filteredDescr)
+comboInfo
+```
+#This step is for normalizing the variables
+we are also dropping Exterior1st_Wd Sdng since it is having some problem with the header
+Here we dont need to normalize the factors that are one hot encoded
+```{r}
+# Step 1) figures out the means, standard deviations, other parameters, etc. to 
+# transform each variable
+preProcValues <- preProcess(filteredDescrNumeric[,1:(ncol(filteredDescrNumeric)-1)], method = c("center","scale"))
+
+# Step 2) the predict() function actually does the transformation using the 
+# parameters identified in the previous step. Weird that it uses predict() to do 
+# this, but it does!
+dNums <- predict(preProcValues, filteredDescrNumeric)
+
+dNums[,'ones'] = NULL
+filteredDescr[,'ones'] = NULL
+filteredDescr$`Exterior1st_Wd Sdng`= NULL
+```
+
+
+
+#combining both the numeric and the one hot encoded factor variable
+
+```{r}
+modeldata = cbind(dNums,filteredDescr)
+```
+
+#Splitting the data into train set and validation set
+
+```{r}
+trainSet <- sample(nrow(modeldata), 0.75*nrow(modeldata), replace = FALSE)
+TrainingSet <- modeldata[trainSet,]
+ValidationSet <- modeldata[-trainSet,]
+#summary(TrainingSet)
+#summary(ValidationSet)
+
+```
+
+#We will try using RandomForest for the purpose of prediction
+```{r}
+require(randomForest)
+#names(TrainingSet)['Exterior1st_Wd Sdng'] <- "Exterior1st_Wd_Sdng"
+
+
+# Create a Random Forest model with default parameters
+model <- randomForest(SalePrice ~ ., data =TrainingSet, ntree = 500, mtry = 10  ,importance = TRUE)
+model
+
+```
+
+#Viewing how the Error rate in model reduced as the number of trees increased
+Also checking the number of trees that gives the minimum error
+
+```{r}
+plot(model$mse)
+which.min(model$mse)
+```
+##Finding the prediction corresponding to the input
+and the rmse root mean squared error value
+```{r}
+pred_randomForest <- predict(model, ValidationSet)
+head(pred_randomForest)
+sqrt(model$mse[which.min(model$mse)])
+```
+#https://uc-r.github.io/random_forests
+
+
+#Finding the rmsle error that used as the evaluation parameter on Kaggle
+```{r}
+require(Metrics)
+rmsle(ValidationSet$SalePrice, pred_randomForest)
+```
+
+```{r}
+library(xgboost)
+x_train = TrainingSet[,-grep('SalePrice', colnames(TrainingSet))]
+y_train = TrainingSet$SalePrice
+dtrain <- data.matrix(x_train)
+#dtrain = data.matrix(TrainingSet)
+label = TrainingSet$SalePrice
+xgb <- xgboost(data = data.matrix(x_train), 
+ label = y_train, 
+ eta = 0.1,
+ max_depth = 5, 
+ nround=250, 
+ subsample = 0.5,
+ colsample_bytree = 0.5,
+ seed = 1,
+ eval_metric = "rmse",
+ objective = "reg:linear",
+ nthread = 3
+)
+
+dim(dtrain)
+```
+
+```{r}
+# predict values in test set
+x_test = ValidationSet[,-grep('SalePrice', colnames(ValidationSet))]
+y_test = ValidationSet$SalePrice
+
+#validat = xgb.DMatrix(as.matrix(sapply(valida, as.numeric)), label=SalePrice)
+
+y_pred <- predict(xgb, data.matrix(x_test))
+```
+
+```{r}
+require(Metrics)
+rmsle(y_test, y_pred)
+```
+
+```{r}
+columnNames = names(test)
+#print(columnNames)
+
+#Initializing the separate dataframe to NULL so that in case of any error they don't keep previous records
+testNumeric = NULL
+testFactor = NULL
+#Iterating over column names and putting it into appropriate basket 
+for (name in columnNames){
+  print(is.null(testFactor))
+  if('factor' == toString(class(test[[name]]))){
+    if(is.null(testFactor)){
+     testFactor = test[name]
+    }
+    testFactor[name] = test[[name]]
+  } else{
+    if(is.null(testNumeric)){
+     testNumeric = test[name]
+    }
+    testNumeric[name] = test[[name]]
+  }
+}
+
+
+
+
+dummyimputedtestFactor <- fastDummies::dummy_cols(testFactor, remove_first_dummy = FALSE)
+
+
+colnames(testNumeric)
+testFactorfilt <- dummyimputedtestFactor[,colnames(filteredDescr)]
+testNumericfilt <- testNumeric[setdiff(colnames(dNums),"SalePrice")]
+
+#names(dummyimputedtestFactor)
+pMiss <- function(x){sum(is.na(x))/length(x)*100}
+apply(testFactorfilt,2,pMiss)
+
+
+pMiss <- function(x){sum(is.na(x))/length(x)*100}
+apply(testNumericfilt,2,pMiss)
+
+require(mice)
+imputertestNum <- mice(testNumericfilt,m=1,maxit=1,meth='cart')
+#summary(imputerF)
+
+imputedtestNumeric = complete(imputertestNum, 1)
+apply(imputedtestNumeric,2,pMiss)
+
+preProcValuesF <- preProcess(imputedtestNumeric[,1:(ncol(imputedtestNumeric))], method = c("center","scale"))
+
+# Step 2) the predict() function actually does the transformation using the 
+# parameters identified in the previous step. Weird that it uses predict() to do 
+# this, but it does!
+dNumsF <- predict(preProcValuesF, imputedtestNumeric)
+
+
+
+finalTestData = cbind(dNumsF,testFactorfilt)
+
+```
+```{r}
+pred_randomForest_test<- predict(model, finalTestData)
+head(pred_randomForest)
+sqrt(model$mse[which.min(model$mse)])
+```
+
+```{r}
+submit = cbind(test$Id,pred_randomForest_test)
+
+colnames(submit)[1] <- "Id"
+colnames(submit)[2] <- "SalePrice"
+colnames(submit)
+
+write.table(submit,file = "submission1.csv",sep = ",", row.names=F)
+```
+
+
