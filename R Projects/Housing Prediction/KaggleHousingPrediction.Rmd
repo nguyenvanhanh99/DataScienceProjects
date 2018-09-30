@@ -228,7 +228,7 @@ names(filteredDescr)[1] <- "ones"
 
 # identify the columns that are linear combos
 comboInfo <- findLinearCombos(filteredDescr)
-comboInfo
+
 
 #filteredDescr[,'ones']=NULL
 
@@ -278,6 +278,7 @@ ValidationSet <- modeldata[-trainSet,]
 ```
 
 #We will try using RandomForest for the purpose of prediction
+This is with 76 features
 ```{r}
 require(randomForest)
 #names(TrainingSet)['Exterior1st_Wd Sdng'] <- "Exterior1st_Wd_Sdng"
@@ -349,6 +350,159 @@ y_pred <- predict(xgb, data.matrix(x_test))
 require(Metrics)
 rmsle(y_test, y_pred)
 ```
+```{r}
+mf <- lm(SalePrice ~ ., data=modeldata)
+summary(mf)
+
+# automatic backward selection
+#install.packages('leaps')
+library(leaps)
+mb <- regsubsets(SalePrice ~ ., data=TrainingSet
+                 , nbest=1
+                 , intercept=T
+                 , method='backward'
+                 , really.big=T
+)
+
+plot(mb,scale='adjr2')
+```
+```{r}
+klm = step(mf, scope=list(lower=mf), direction="backward")
+
+klmback = step(mf, data=TrainingSet, direction="backward")
+
+modelafterbackwardelim = klmback$model
+
+names(modelafterbackwardelim)
+
+modelsteps <- randomForest(SalePrice ~ ., data =modelafterbackwardelim, ntree = 500, mtry = 10  ,importance = TRUE)
+modelsteps
+subvalidationSet = ValidationSet[,names(modelafterbackwardelim)]
+
+x_test = subvalidationSet[,-grep('SalePrice', colnames(subvalidationSet))]
+y_test = subvalidationSet$SalePrice
+
+
+pred_randomForestSteps <- predict(modelsteps, x_test)
+rmsle(y_test, pred_randomForestSteps)
+
+```
+
+```{r}
+library(caret)
+ctrl <- trainControl(method="cv",     # cross-validation set approach to use
+                     number=3,        # k number of times to do k-fold
+                     classProbs = F,  
+                     summaryFunction = defaultSummary,
+                     allowParallel=T)
+# train a LASSO
+lassofit <- train(SalePrice ~ .,
+                  data = TrainingSet,
+                  method = "lars",
+                  trControl = ctrl,
+                  #preProcess=c("center","scale"), # not needed; already transformed
+                  tuneLength = 15,                # this specifies various s values
+                  metric = "RMSE")
+
+plot(lassofit$finalModel)
+
+# optimal s
+lassofit$bestTune[[1]]
+plot(x=lassofit$results$fraction, y=lassofit$results$RMSE
+     , col="blue", pch=19
+     , main="RMSE vs s from caret runs", xlab="S", ylab="RMSE")
+
+
+rf <- train(SalePrice ~ .,
+            data = TrainingSet,
+            method = "rf",
+            importance=T,    # we add this in or it varImp cannot be computed
+            trControl = ctrl,
+            tuneLength = 10,
+            metric = "RMSE"
+)
+rf
+
+```
+
+```{r}
+# generate predictions on train set
+mb_pred1 <- predict(mb, TrainingSet)
+mf_pred1 <- predict(mf, TrainingSet)
+lasso_pred1 <- predict(lassofit, TrainingSet)
+rf_pred1 <- predict(rf, TrainingSet)
+
+# generate predictions on test set
+mb_pred2 <- predict(mb, test)
+mf_pred2 <- predict(mf, test)
+lasso_pred2 <- predict(lassofit, test)
+rf_pred2 <- predict(rf, test)
+
+# calculate performance
+tr_results <- rbind(
+    postResample(pred = mb_pred1, obs = train$y),
+    postResample(pred = mf_pred1, obs = train$y),
+    postResample(pred = lasso_pred1, obs = train$y),
+    postResample(pred = rf_pred1, obs = train$y)
+)
+te_results <- rbind(
+    postResample(pred = mb_pred2, obs = test$y),
+    postResample(pred = mf_pred2, obs = test$y),
+    postResample(pred = lasso_pred2, obs = test$y),
+    postResample(pred = rf_pred2, obs = test$y)
+)
+Models <- c("LR-Backward","LR-Forward","Lasso","Random Forest")
+Set <- c(rep("Train",4))
+(tr_results <- data.frame(Models, Set, tr_results))
+Set <- c(rep("Test",4))
+(te_results <- data.frame(Models, Set, te_results))
+
+library(reshape)
+results1 <- melt(tr_results, id=c("Models","Set"))
+results2 <- melt(te_results, id=c("Models","Set"))
+(results <- rbind(results1, results2))
+
+
+library(ggplot2)
+theme_set(theme_classic())
+g <- ggplot(results[results$variable=="Rsquared",], aes(fill=Set, y=value, x=Models)) 
+g <- g + geom_bar(position="dodge", colour="black", stat="identity")
+g <- g + labs(title="Statistical Performance by Model", y="R-Squared")
+g <- g + theme(plot.title = element_text(color="black", face="bold", size=14, hjust=0.5))
+g <- g + theme(axis.text.x=element_text(colour="black"),
+               axis.text.y=element_text(colour="black"))
+g <- g + scale_y_continuous(labels = scales::percent)
+g <- g + scale_fill_manual("Partition", values=c("Train"="orange","Test"="#0072B2"))
+g
+
+
+library(ggplot2)
+library(ggExtra)
+bestmodel <- data.frame(Y=test$y, Yhat=lasso_pred2)
+custom_subtitle <- paste0("R2 = ", round(subset(results, Set=="Test" & Models=="Lasso" & variable=="Rsquared","value")[[1]],4))
+
+# Scatterplot
+theme_set(theme_bw())  # pre-set the bw theme.
+g <- ggplot(bestmodel, aes(Yhat, Y)) + geom_count(colour="black", size=1)
+g <- g + geom_smooth(method="lm", se=T)
+g <- g + theme(legend.position="none")
+g <- g + labs(y="Actual Sales Price ($)", 
+              x="Predicted Sales Price ($)", 
+              title="Best Model Prediction",
+              subtitle = custom_subtitle)
+g <- g + theme(plot.title = element_text(color="black", face="bold", size=14, hjust=0.5))
+g <- g + theme(plot.subtitle = element_text(color="black", face="bold", size=11, hjust=0.5))
+g <- g + theme(axis.text.x=element_text(colour="black"),
+               axis.text.y=element_text(colour="black"))
+g <- g + scale_x_continuous(labels = scales::dollar)
+g <- g + scale_y_continuous(labels = scales::dollar)
+g <- g + coord_cartesian(xlim=c(20000, 420000), ylim=c(20000, 420000)) 
+g <- g + guides(fill=FALSE)
+g
+ggMarginal(g, type="histogram", fill="orange", size=8)
+
+
+```
 
 ```{r}
 columnNames = names(test)
@@ -415,15 +569,25 @@ pred_randomForest_test<- predict(model, finalTestData)
 head(pred_randomForest)
 sqrt(model$mse[which.min(model$mse)])
 ```
+```{r}
+all = names(modelafterbackwardelim)
+all = all[-1]
+
+finalTestDataInput = finalTestData[,all]
+
+pred_randomForest_test_44<- predict(modelsteps, finalTestDataInput)
+head(pred_randomForest)
+sqrt(model$mse[which.min(model$mse)])
+```
 
 ```{r}
-submit = cbind(test$Id,pred_randomForest_test)
+submit = cbind(test$Id,pred_randomForest_test_44)
 
 colnames(submit)[1] <- "Id"
 colnames(submit)[2] <- "SalePrice"
 colnames(submit)
 
-write.table(submit,file = "submission1.csv",sep = ",", row.names=F)
+write.table(submit,file = "submission2.csv",sep = ",", row.names=F)
 ```
 
 

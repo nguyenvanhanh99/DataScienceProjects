@@ -1,0 +1,471 @@
+---
+title: "NYCTaxiRate"
+author: "Saurabh Suman"
+date: "September 28, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(data.table)
+#library(ff)
+
+train <- read.table(file="train.csv",nrows = 100000, header=T, sep=",")
+
+str(train)
+head(train,5)
+
+```
+
+##Splitting the pickup date time in day month year ,hour and minute of pickup
+Dropping Column key as it is same as pickup time
+```{r}
+library(lubridate)
+train[,'pickup_weekDay']=wday(as.POSIXlt(train$pickup_datetime))
+train[,'pickup_year']=year(as.POSIXlt(train$pickup_datetime))
+train[,'pickup_month']=month(as.POSIXlt(train$pickup_datetime))
+train[,'pickup_hour']=hour(as.POSIXct(train$pickup_datetime, format="%Y-%m-%d %H:%M:%S"))
+train[,'pickup_minute']=minute(as.POSIXct(train$pickup_datetime, format="%Y-%m-%d %H:%M:%S"))
+train$key = NULL
+save(train,file='train.Rda')
+```
+##PLotting the latitude and longitudes to check for outliers
+```{r}
+
+boxplot(train$pickup_longitude, main="Pickup Longitude")
+boxplot(train$pickup_latitude, main="Pickup Latitude")
+boxplot(train$dropoff_longitude, main="DropOff Longitude")
+boxplot(train$dropoff_latitude, main="DropOff Latitude")
+```
+
+##since outliers in Latitude and Longitude will prevent the distM function from getting applied, so using the caping of outliers method
+```{r}
+for (name in c('pickup_longitude','pickup_latitude','dropoff_longitude','dropoff_latitude')){
+x <- train[,name]
+qnt <- quantile(x, probs=c(.25, .75), na.rm = T)
+caps <- quantile(x, probs=c(.05, .95), na.rm = T)
+H <- 1.5 * IQR(x, na.rm = T)
+x[x < (qnt[1] - H)] <- caps[1]
+x[x > (qnt[2] + H)] <- caps[2]
+train[,name] = x
+}
+```
+
+##Check if outlier issue resolved
+```{r}
+boxplot(train$pickup_longitude, main="Pickup Longitude after outlier capping")
+boxplot(train$pickup_latitude, main="Pickup Latitude after outlier capping")
+boxplot(train$dropoff_longitude, main="DropOff Longitude  after outlier capping")
+boxplot(train$dropoff_latitude, main="DropOff Latitude after outlier capping")
+```
+
+
+```{r}
+#load('train.Rda')
+
+#install.packages('geosphere')
+library(geosphere)
+
+tripDistance = c()
+for (i in (1:nrow(train))){
+  tripDistance = c(tripDistance,distm(c(train[i,3],train[i,4]),c(train[i,5],train[i,6]),fun = distHaversine))
+  #print(paste(i,tripDistance))
+  }
+
+
+
+train=cbind(train,tripDistance)
+#save(train,file='train.Rda')
+```
+
+##converting the features that are not ordinal into factors
+```{r}
+#load('train.Rda')
+train$pickup_datetime = NULL
+train$pickup_weekDay = factor(train$pickup_weekDay)
+train$pickup_year = factor(train$pickup_year)
+train$pickup_month = factor(train$pickup_month)
+train$pickup_hour = factor(train$pickup_hour)
+train$pickup_minute = factor(train$pickup_minute)
+```
+
+##checking for missing values
+```{r}
+pMiss <- function(x){sum(is.na(x))/length(x)*100}
+apply(train,2,pMiss)
+
+sum(is.na(train$pickup_hour))
+#since the rows with NA are only two, therefor simply dropiing those rows
+train = na.omit(train)
+```
+
+```{r}
+hist(train$fare_amount)
+hist(train$passenger_count)
+#hist(train$pickup_datetime)
+hist(train$fare_amount)
+```
+##What we will do now is use simple random forest and see if the results changes after doing any of the pre-processing technique such as nornalization 
+#Train test split of data
+```{r}
+rm(caps,H,i,name,qnt,tripDistance,x)
+set.seed(1900)
+library(caret)
+inTrain <- createDataPartition(y = train$fare_amount, p = .6, list = F)
+trainData <- train[inTrain,]
+testcvData <- train[-inTrain,]
+inTest <- createDataPartition(y = testcvData$fare_amount, p = .5, list = F)
+testData <- testcvData[inTest,]
+cvData <- testcvData[-inTest,]
+#train$AMI_FLAG <- as.factor(train$AMI_FLAG)
+rm(inTrain, inTest, testcvData)
+```
+
+```{r}
+control <- trainControl(method="cv", number=5, repeats=2,verboseIter =TRUE)
+seed <- 7
+metric <- "RMSE"
+set.seed(seed)
+mtry <- sqrt(ncol(trainData))
+tunegrid <- expand.grid(.mtry=mtry)
+rf_default <- train(fare_amount~., data=trainData, method="rf", metric=metric, tuneGrid=tunegrid, trControl=control)
+print(rf_default)
+```
+
+```{r}
+predictions <- predict(object=rf_default, testData[,-1], type='raw')
+
+print(postResample(pred=predictions, obs=testData[,1]))
+```
+##Now we will try and split the data into numeric and factor then normalize the numeric factors and one hot encode the factor features
+```{r}
+#load('train.Rda')
+library(caret)
+numericTrain <- train[,which(sapply(train, is.numeric))]
+factorTrain <- train[,which(sapply(train, is.factor))]
+
+factorColumns = as.vector(colnames(train)[which(sapply(train, is.factor))])
+
+factorTrain_dummy <- fastDummies::dummy_cols(factorTrain, remove_first_dummy = TRUE)
+factorTrain_dummy = factorTrain_dummy[ , -which(names(factorTrain) %in% factorColumns)]
+
+
+#removing near zero variance features
+nzvdffactorTrain_dummy <- nearZeroVar(factorTrain_dummy[,(1:ncol(factorTrain_dummy))], uniqueCut=10)
+factorTrain_dummy = factorTrain_dummy[,-nzvdffactorTrain_dummy]
+
+```
+##Applying BOX COX on numeric features to normalize and remove skewness
+#Checking the fields that are hoghly skewed
+```{r}
+library(e1071)                    # load e1071 
+skewness(numericTrain$fare_amount) 
+
+for(i in 1:ncol(numericTrain)){
+        if (abs(skewness(numericTrain[,i]))>0.8){
+           
+          print(paste(colnames(numericTrain)[i],skewness(numericTrain[,i]))) 
+           
+        }
+}
+
+```
+
+
+```{r}
+#library(caret)
+preProcValues <- preProcess(numericTrain[,-1], method = c("YeoJohnson","scale","center"))
+dNums <- predict(preProcValues, numericTrain[,-1])
+
+numericTrainNorm=cbind(dNums,numericTrain[,1])
+names(numericTrainNorm)[names(numericTrainNorm) == 'numericTrain[, 1]'] <- 'fare_amount'
+
+
+for(i in 1:ncol(numericTrainNorm)){
+        #if (abs(skewness(numericTrainNorm[,i]))>0.8){
+           
+          print(paste(colnames(numericTrainNorm)[i],skewness(numericTrainNorm[,i]))) 
+           
+       # }
+}
+
+
+preProcTrain = cbind(numericTrainNorm,factorTrain_dummy)
+
+rm(control,cvData,dNums,factorTrain,factorTrain_dummy,numericTrain,numericTrainNorm,preProcValues,rf_default,testData,trainData,tunegrid)
+rm(factorColumns,i,metric,mtry,nzvdffactorTrain_dummy,predictions,seed)
+```
+
+
+##Doing the train test split again on the new dataset and then will be performing random forest to compare the results
+```{r}
+set.seed(1900)
+library(caret)
+inTrain <- createDataPartition(y = preProcTrain$fare_amount, p = .6, list = F)
+trainData <- preProcTrain[inTrain,]
+testcvData <- preProcTrain[-inTrain,]
+inTest <- createDataPartition(y = testcvData$fare_amount, p = .5, list = F)
+testData <- testcvData[inTest,]
+cvData <- testcvData[-inTest,]
+#train$AMI_FLAG <- as.factor(train$AMI_FLAG)
+rm(inTrain, inTest, testcvData)
+```
+
+```{r Random Forest in Pre-Processed data}
+control <- trainControl(method="cv", number=5, repeats=2,verboseIter =TRUE)
+seed <- 7
+metric <- "RMSE"
+set.seed(seed)
+mtry <- sqrt(ncol(trainData))
+tunegrid <- expand.grid(.mtry=mtry)
+rf_default <- train(fare_amount~., data=trainData, method="rf", metric=metric, tuneGrid=tunegrid, trControl=control)
+print(rf_default)
+```
+```{r}
+library(randomForest)
+train.rf = randomForest(fare_amount ~ ., data=trainData ,ntree=100, importance=TRUE)
+train.rf
+```
+```{r}
+rm(caps,H,i,name,qnt,tripDistance,x)
+set.seed(1900)
+library(caret)
+inTrain <- createDataPartition(y = train$fare_amount, p = .6, list = F)
+trainDataNonTrans <- train[inTrain,]
+testcvDataNonTrans <- train[-inTrain,]
+inTest <- createDataPartition(y = testcvDataNonTrans$fare_amount, p = .5, list = F)
+testDataNonTrans <- testcvDataNonTrans[inTest,]
+cvDataNonTrans <- testcvDataNonTrans[-inTest,]
+#train$AMI_FLAG <- as.factor(train$AMI_FLAG)
+rm(inTrain, inTest, testcvDataNonTrans)
+```
+
+##Using Simple linear Regression Model
+```{r}
+lmMod <- lm(fare_amount ~ ., data=trainData)  # build the model
+summary(lmMod)
+#distPred <- predict(lmMod, testData)
+
+```
+##Simple Linear Regression on Non-Tranformed Data
+```{r}
+rm(lmModNonTran)
+lmModNonTran <- lm(fare_amount ~ ., data=trainDataNonTrans)
+summary(lmModNonTran)
+colnames(trainDataNonTrans)
+```
+
+```{r}
+install.packages("DAAG")
+library(DAAG)
+cvResults <- suppressWarnings(CVlm(data=trainDataNonTrans, form.lm=formula(fare_amount ~ .), m=5, dots=FALSE, seed=29, legend.pos="topleft",  printit=FALSE, main="Small symbols are predicted values while bigger ones are actuals."))
+
+attr(cvResults, 'ms')
+```
+
+
+```{r}
+# Back to numeric
+#train$AMI_FLAG <- as.numeric(levels(train$AMI_FLAG))[train$AMI_FLAG]
+#train_smote$AMI_FLAG <- as.numeric(levels(train_smote$AMI_FLAG))[train_smote$AMI_FLAG]
+
+# As Matrix
+library(xgboost)
+library(Matrix)
+i <- grep("fare_amount", colnames(trainDataNonTrans)) # Get index Class column
+train <- Matrix(as.matrix(trainDataNonTrans), sparse = TRUE)
+#train_smote <- Matrix(as.matrix(train_smote), sparse = TRUE)
+test <- Matrix(as.matrix(testDataNonTrans), sparse = TRUE)
+cv <- Matrix(as.matrix(cvDataNonTrans), sparse = TRUE)
+
+# Create XGB Matrices
+
+train_xgb <- xgb.DMatrix(data = train[,-i], label = train[,i])
+#train_smote_xgb <- xgb.DMatrix(data = train_smote[,-i], label = train_smote[,i])
+test_xgb <- xgb.DMatrix(data = test[,-i], label = test[,i])
+cv_xgb <- xgb.DMatrix(data = cv[,-i], label = cv[,i])
+
+# Watchlist
+watchlist <- list(train  = train_xgb, cv = cv_xgb)
+```
+
+```{r}
+best_param = list()
+best_seednumber = 1234
+best_rmse = Inf
+best_rmse_index = 0
+
+for (iter in 1:2) {
+     param <- list(objective = "reg:linear",
+          eval_metric = "rmse",
+          max_depth = sample(6:8, 1),
+          eta = runif(1, .2, .3),
+          gamma = runif(1, 0.0, 0.1), 
+          subsample = runif(1, .4, .8),
+          colsample_bytree = runif(1, .6, .8), 
+          min_child_weight = sample(1:20, 1),
+          max_delta_step = sample(1:10, 1)
+          )
+    cv.nround = 100
+    cv.nfold = 10
+    seed.number = sample.int(10000, 1)[[1]]
+    set.seed(seed.number)
+    mdcv <- xgb.cv(data=train_xgb, params = param, nthread=3, 
+                    nfold=cv.nfold, nrounds=cv.nround,
+                    verbose = T, early.stopping.round=8, maximize=FALSE)
+
+    min_rmse = min(mdcv$evaluation_log$test_rmse_mean)
+    min_rmse_index = which.min(mdcv$evaluation_log$test_rmse_mean)
+
+    if (min_rmse < best_rmse) {
+        best_rmse = min_rmse
+        best_rmse_index = min_rmse_index
+        best_seednumber = seed.number
+        best_param = param
+    }
+}
+
+```
+
+```{r}
+nround = best_rmse_index
+set.seed(best_seednumber)
+md <- xgb.train(data=train_xgb, params=best_param, nrounds=nround, nthread=3)
+
+```
+
+```{r}
+xgb.predict <- predict(md , test_xgb)
+postResample(xgb.predict, testDataNonTrans$fare_amount)
+
+```
+##Performing XGBoost on tranformed data
+```{r}
+i <- grep("fare_amount", colnames(trainData)) # Get index Class column
+train <- Matrix(as.matrix(trainData), sparse = TRUE)
+#train_smote <- Matrix(as.matrix(train_smote), sparse = TRUE)
+test <- Matrix(as.matrix(testData), sparse = TRUE)
+cv <- Matrix(as.matrix(cvData), sparse = TRUE)
+
+# Create XGB Matrices
+
+train_xgb <- xgb.DMatrix(data = train[,-i], label = train[,i])
+#train_smote_xgb <- xgb.DMatrix(data = train_smote[,-i], label = train_smote[,i])
+test_xgb <- xgb.DMatrix(data = test[,-i], label = test[,i])
+cv_xgb <- xgb.DMatrix(data = cv[,-i], label = cv[,i])
+
+# Watchlist
+watchlist <- list(train  = train_xgb, cv = cv_xgb)
+```
+
+```{r}
+best_param = list()
+best_seednumber = 1234
+best_rmse = Inf
+best_rmse_index = 0
+
+for (iter in 1:2) {
+     param <- list(objective = "reg:linear",
+          eval_metric = "rmse",
+          max_depth = sample(6:8, 1),
+          eta = runif(1, .2, .3),
+          gamma = runif(1, 0.0, 0.1), 
+          subsample = runif(1, .4, .8),
+          colsample_bytree = runif(1, .6, .8), 
+          min_child_weight = sample(1:20, 1),
+          max_delta_step = sample(1:10, 1)
+          )
+    cv.nround = 100
+    cv.nfold = 10
+    seed.number = sample.int(10000, 1)[[1]]
+    set.seed(seed.number)
+    mdcv <- xgb.cv(data=train_xgb, params = param, nthread=3, 
+                    nfold=cv.nfold, nrounds=cv.nround,
+                    verbose = T, early.stopping.round=8, maximize=FALSE)
+
+    min_rmse = min(mdcv$evaluation_log$test_rmse_mean)
+    min_rmse_index = which.min(mdcv$evaluation_log$test_rmse_mean)
+
+    if (min_rmse < best_rmse) {
+        best_rmse = min_rmse
+        best_rmse_index = min_rmse_index
+        best_seednumber = seed.number
+        best_param = param
+    }
+}
+```
+```{r}
+nround = best_rmse_index
+set.seed(best_seednumber)
+mdN <- xgb.train(data=train_xgb, params=best_param, nrounds=nround, nthread=3)
+
+```
+
+```{r}
+xgb.predict <- predict(mdN , test_xgb)
+postResample(xgb.predict, testData$fare_amount)
+
+```
+```{r}
+
+test <- read.table(file="test.csv", header=T, sep=",")
+
+library(lubridate)
+test[,'pickup_weekDay']=wday(as.POSIXlt(test$pickup_datetime))
+test[,'pickup_year']=year(as.POSIXlt(test$pickup_datetime))
+test[,'pickup_month']=month(as.POSIXlt(test$pickup_datetime))
+test[,'pickup_hour']=hour(as.POSIXct(test$pickup_datetime, format="%Y-%m-%d %H:%M:%S"))
+test[,'pickup_minute']=minute(as.POSIXct(test$pickup_datetime, format="%Y-%m-%d %H:%M:%S"))
+test$key = NULL
+save(test,file='test.Rda')
+
+
+```
+```{r}
+library(geosphere)
+
+tripDistance = c()
+for (i in (1:nrow(test))){
+  tripDistance = c(tripDistance,distm(c(test[i,2],test[i,3]),c(test[i,4],test[i,5]),fun = distHaversine))
+  #print(paste(i,tripDistance))
+  }
+
+
+
+test=cbind(test,tripDistance)
+#save(train,file='train.Rda')
+```
+
+##converting the features that are not ordinal into factors
+```{r}
+#load('train.Rda')
+test$pickup_datetime = NULL
+test$pickup_weekDay = factor(test$pickup_weekDay)
+test$pickup_year = factor(test$pickup_year)
+test$pickup_month = factor(test$pickup_month)
+test$pickup_hour = factor(test$pickup_hour)
+test$pickup_minute = factor(test$pickup_minute)
+```
+
+```{r}
+rf_default
+test <- Matrix(as.matrix(test), sparse = TRUE)
+test_xgb <- xgb.DMatrix(data = test)
+
+xgb.submit <- predict(md, test_xgb)
+```
+
+```{r}
+submission1 <- read.table(file="sample_submission.csv", header=T, sep=",")
+submission1$fare_amount = xgb.submit
+test[,1]
+submission1 =cbind(test,xgb.submit)
+submission2 = submission1[,c(1,8)]
+names(submission2)[names(submission2) == 'xgb.submit'] <- 'fare_amount'
+write.csv(submission2,file="submissionTest.csv",row.names = FALSE)
+
+```
+
