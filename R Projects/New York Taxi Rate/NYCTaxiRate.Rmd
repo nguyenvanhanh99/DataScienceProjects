@@ -8,40 +8,48 @@ output: html_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
-
+##Read data from the train file.
+#since the size of train data is huge , picking up only the first 100 thousand rows
 ```{r}
 library(data.table)
 #library(ff)
 
 train <- read.table(file="train.csv",nrows = 100000, header=T, sep=",")
 
+#check the structure of dataset
 str(train)
+#read the first five rows of dataset
 head(train,5)
 
 ```
 
 ##Splitting the pickup date time in day month year ,hour and minute of pickup
-Dropping Column key as it is same as pickup time
+#Dropping Column key as it is same as pickup time
 ```{r}
+load('train.Rda')
+#install lubrudate as it will help in filtering out the day and year from the dataset
 library(lubridate)
 train[,'pickup_weekDay']=wday(as.POSIXlt(train$pickup_datetime))
+train[,'pickup_day']=day(as.POSIXlt(train$pickup_datetime))
 train[,'pickup_year']=year(as.POSIXlt(train$pickup_datetime))
 train[,'pickup_month']=month(as.POSIXlt(train$pickup_datetime))
 train[,'pickup_hour']=hour(as.POSIXct(train$pickup_datetime, format="%Y-%m-%d %H:%M:%S"))
 train[,'pickup_minute']=minute(as.POSIXct(train$pickup_datetime, format="%Y-%m-%d %H:%M:%S"))
 train$key = NULL
-save(train,file='train.Rda')
+#save(train,file='train.Rda')
 ```
-##PLotting the latitude and longitudes to check for outliers
+##Plotting the latitude and longitudes to check for outliers
 ```{r}
 
 boxplot(train$pickup_longitude, main="Pickup Longitude")
 boxplot(train$pickup_latitude, main="Pickup Latitude")
 boxplot(train$dropoff_longitude, main="DropOff Longitude")
 boxplot(train$dropoff_latitude, main="DropOff Latitude")
+boxplot(train$pickup_day, main="PickUp Date")
 ```
 
 ##since outliers in Latitude and Longitude will prevent the distM function from getting applied, so using the caping of outliers method
+#this will prevent the outlier from going beyond 95th percentile and 5th percentile
 ```{r}
 for (name in c('pickup_longitude','pickup_latitude','dropoff_longitude','dropoff_latitude')){
 x <- train[,name]
@@ -55,6 +63,7 @@ train[,name] = x
 ```
 
 ##Check if outlier issue resolved
+#plot the box plot again
 ```{r}
 boxplot(train$pickup_longitude, main="Pickup Longitude after outlier capping")
 boxplot(train$pickup_latitude, main="Pickup Latitude after outlier capping")
@@ -62,7 +71,7 @@ boxplot(train$dropoff_longitude, main="DropOff Longitude  after outlier capping"
 boxplot(train$dropoff_latitude, main="DropOff Latitude after outlier capping")
 ```
 
-
+##Calculating the trip distance using the geosphere package to get the acutal geographical distance between latitude and longitudal points, currently using only the Heversine distance which effectively is the spherical distance between two given co-rdinates in meters
 ```{r}
 #load('train.Rda')
 
@@ -75,25 +84,29 @@ for (i in (1:nrow(train))){
   #print(paste(i,tripDistance))
   }
 
-
-
-train=cbind(train,tripDistance)
+#concatenating the trip distance to the column
+train[,'tripDistance'] = tripDistance
+#train=cbind(train,tripDistance)
 #save(train,file='train.Rda')
 ```
 
 ##converting the features that are not ordinal into factors
+#this is done because the realtive difference in the magnitude doesn't have any impact in the outcome, like 4th day of the week is not twice as likely as 2nd day of the week, in theory
 ```{r}
 #load('train.Rda')
 train$pickup_datetime = NULL
 train$pickup_weekDay = factor(train$pickup_weekDay)
+train$pickup_day = factor(train$pickup_day)
 train$pickup_year = factor(train$pickup_year)
 train$pickup_month = factor(train$pickup_month)
 train$pickup_hour = factor(train$pickup_hour)
 train$pickup_minute = factor(train$pickup_minute)
+str(train)
 ```
 
 ##checking for missing values
 ```{r}
+#define function and use apply function to check the na values present in the rows
 pMiss <- function(x){sum(is.na(x))/length(x)*100}
 apply(train,2,pMiss)
 
@@ -103,14 +116,16 @@ train = na.omit(train)
 ```
 
 ```{r}
+#cehcking the distribution of numerical features , since a highly skewed distribution can impact the Normal assumtion of the model and not give optimal results
 hist(train$fare_amount)
 hist(train$passenger_count)
 #hist(train$pickup_datetime)
 hist(train$fare_amount)
 ```
-##What we will do now is use simple random forest and see if the results changes after doing any of the pre-processing technique such as nornalization 
+##What we will do now is use simple random forest and see if the results changes after doing any of the pre-processing technique such as normalization 
 #Train test split of data
 ```{r}
+#cleaning the environment objects
 rm(caps,H,i,name,qnt,tripDistance,x)
 set.seed(1900)
 library(caret)
@@ -123,17 +138,47 @@ cvData <- testcvData[-inTest,]
 #train$AMI_FLAG <- as.factor(train$AMI_FLAG)
 rm(inTrain, inTest, testcvData)
 ```
-
+#In case there is any NoNNA and Non Null missing attribute
+#verify is there are any attributes that are neither NA nor NULL but empty of size 0
 ```{r}
-control <- trainControl(method="cv", number=5, repeats=2,verboseIter =TRUE)
-seed <- 7
+removingNonNAMissing = function (dataframe,datacolumn){
+
+toremove = c()
+for (i in 1:100000){
+  #print(nchar(toString(dataframe[i,datacolumn])))
+  if(nchar(toString(dataframe[i,datacolumn]))==0){
+    toremove = c(i,toremove)
+  }
+}
+
+return (toremove)
+}
+
+for (name in colnames(train)){
+#x=removingNonNAMissing(train,name)
+  print(name)
+  print(sum(is.na(train[,name])))
+}
+```
+
+#applying random forest on the model, with mtry value of 4 which is 1/3 of the number of features. this is suggested default values , and signifies the number of feature that random forest will randomly pick to start building the forest. other metrics such as objective is set to RMSE and cross validation is set to 5 fold
+```{r}
+control <- trainControl(method="cv", number=5,verboseIter =TRUE)
+seed <- 70
 metric <- "RMSE"
 set.seed(seed)
-mtry <- sqrt(ncol(trainData))
+mtry <- 4
 tunegrid <- expand.grid(.mtry=mtry)
 rf_default <- train(fare_amount~., data=trainData, method="rf", metric=metric, tuneGrid=tunegrid, trControl=control)
 print(rf_default)
+#sum(complete.cases(train$fare_amount))
+#hist(train$fare_amount)
+#sum(is.na(train$fare_amount))
 ```
+The result that we get here is not as great as XGBoost and other form of randomForest which we will se ahead
+
+
+
 
 ```{r}
 predictions <- predict(object=rf_default, testData[,-1], type='raw')
@@ -141,6 +186,7 @@ predictions <- predict(object=rf_default, testData[,-1], type='raw')
 print(postResample(pred=predictions, obs=testData[,1]))
 ```
 ##Now we will try and split the data into numeric and factor then normalize the numeric factors and one hot encode the factor features
+#This is being done to check if the normalizing and one hot encoding significantly affect the result of the random forest
 ```{r}
 #load('train.Rda')
 library(caret)
@@ -159,7 +205,7 @@ factorTrain_dummy = factorTrain_dummy[,-nzvdffactorTrain_dummy]
 
 ```
 ##Applying BOX COX on numeric features to normalize and remove skewness
-#Checking the fields that are hoghly skewed
+#Checking the fields that are highly skewed
 ```{r}
 library(e1071)                    # load e1071 
 skewness(numericTrain$fare_amount) 
@@ -195,6 +241,7 @@ for(i in 1:ncol(numericTrainNorm)){
 
 preProcTrain = cbind(numericTrainNorm,factorTrain_dummy)
 
+#cleaning the environment
 rm(control,cvData,dNums,factorTrain,factorTrain_dummy,numericTrain,numericTrainNorm,preProcValues,rf_default,testData,trainData,tunegrid)
 rm(factorColumns,i,metric,mtry,nzvdffactorTrain_dummy,predictions,seed)
 ```
@@ -244,10 +291,10 @@ rm(inTrain, inTest, testcvDataNonTrans)
 ```
 
 ##Using Simple linear Regression Model
+#Also appying the simple linear regression model for comparison purpose
 ```{r}
 lmMod <- lm(fare_amount ~ ., data=trainData)  # build the model
 summary(lmMod)
-#distPred <- predict(lmMod, testData)
 
 ```
 ##Simple Linear Regression on Non-Tranformed Data
@@ -265,7 +312,7 @@ cvResults <- suppressWarnings(CVlm(data=trainDataNonTrans, form.lm=formula(fare_
 
 attr(cvResults, 'ms')
 ```
-
+##Now applying XGBoost to the dataset (both transformed and non transformed)
 
 ```{r}
 # Back to numeric
@@ -292,6 +339,7 @@ cv_xgb <- xgb.DMatrix(data = cv[,-i], label = cv[,i])
 watchlist <- list(train  = train_xgb, cv = cv_xgb)
 ```
 
+##Cross validation and number of iteration set after performing successive rounds of optmizationa and hyperparameter search
 ```{r}
 best_param = list()
 best_seednumber = 1234
@@ -329,14 +377,14 @@ for (iter in 1:2) {
 }
 
 ```
-
+##train XGB on the best params identified from above
 ```{r}
 nround = best_rmse_index
 set.seed(best_seednumber)
 md <- xgb.train(data=train_xgb, params=best_param, nrounds=nround, nthread=3)
 
 ```
-
+##Predict the output
 ```{r}
 xgb.predict <- predict(md , test_xgb)
 postResample(xgb.predict, testDataNonTrans$fare_amount)
@@ -409,6 +457,8 @@ xgb.predict <- predict(mdN , test_xgb)
 postResample(xgb.predict, testData$fare_amount)
 
 ```
+
+##Now since the model results are good enough , we will go ahead with performing the same set of transformations ont he test data so that submission file can be generated
 ```{r}
 
 test <- read.table(file="test.csv", header=T, sep=",")
@@ -458,6 +508,7 @@ test_xgb <- xgb.DMatrix(data = test)
 xgb.submit <- predict(md, test_xgb)
 ```
 
+##Creating submission file for the result on test set
 ```{r}
 submission1 <- read.table(file="sample_submission.csv", header=T, sep=",")
 submission1$fare_amount = xgb.submit
