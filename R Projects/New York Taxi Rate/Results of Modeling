@@ -1,0 +1,10 @@
+			                                      AdjRSq	Residual StandardError		Features	RMSE	MAE	mtry
+Simple Linear Regression (No Tranform)		  0.6162	          5.953	            111			
+Simple Linear Regression			              0.5011	          6.787		          35			
+Random Forest (No Tranform)		            	0.6419302			                      11	6.35	3.666432	3.464102
+Random Forest			                          0.7126147			                      35	5.162	2.433224	6
+XGBoost (No Transform)			                0.7046551				                        5.404	2.41269	
+XGBoost 			                              0.7077433				                        5.3737888	2.4116874
+
+
+The final RMSE on Kaggle submission forum was 4.34092
