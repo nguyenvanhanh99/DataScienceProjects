@@ -1,0 +1,12 @@
+name: KKBoxChurn
+title: KKBoxChurn
+username:
+account: saurabhsuman
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 509380
+bundleId: 1638714
+url: https://saurabhsuman.shinyapps.io/KKBoxChurn/
+when: 1539332969.37606
+asMultiple: FALSE
+asStatic: FALSE

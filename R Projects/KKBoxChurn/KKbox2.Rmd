@@ -1,0 +1,502 @@
+---
+title: "KKBoxAggData"
+author: "Saurabh"
+date: "10/10/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+```{r cache=TRUE}
+#set the working directories
+getwd()
+setwd('/home/ssuman/KKBox/data/churn_comp_refresh')
+
+#import csv from kaggle data csv
+train <- read.table(file="train_v2.csv", header=T, sep=",")
+userLogs <- read.table(file="user_logs_v2.csv", header=T, sep=",")
+transaction <- read.table(file="transactions_v2.csv", header=T, sep=",")
+members <- read.table(file="members_v3.csv", header=T, sep=",")
+
+#aggreagate user logs data and find the mean of all the parameters for grouping by msno
+agguserlogs= aggregate(. ~ msno, data=userLogs, FUN=mean)
+
+```
+
+```{r cache=TRUE }
+##check the number of records that exists per user in the dataset
+agguserlogs[agguserlogs$msno=='///2pAPKetZe8zPqAwkYBjAUr+4pS8Rc6bsO4eGAlWI=',]
+userLogs[userLogs$msno=='///2pAPKetZe8zPqAwkYBjAUr+4pS8Rc6bsO4eGAlWI=',]
+transaction[transaction$msno=='MKRWM4NLqszR3JrgcFvmat48Yunvxtib8I7XvBUw/+M=',]
+
+#count number of snapshots of songs listening captured
+d = aggregate(date ~ msno, data = userLogs, FUN = function(x){NROW(x)})
+names(d)[2]='count_of_logs'
+
+#join the count of entries after group by to the mean of features(numeric) 
+d=join(agguserlogs,d,type='inner',by='msno')
+
+#count mean of actual amount paid for clubing for transaction table
+aggTran= aggregate(actual_amount_paid ~ msno, data=transaction, FUN=mean)
+
+#count number of transaction for payment related stuff
+d1 = aggregate(actual_amount_paid ~ msno, data = transaction, FUN = function(x){NROW(x)})
+d=join(aggTran,d,type='inner',by='msno')
+
+#add all the is_cancel terms so that we get estimate of how many times user has canceled the subscription
+d2 = aggregate(is_cancel ~ msno, data = transaction, FUN = sum)
+dataset$actual_amount_paid = NULL
+
+#join all the columns created above to the actual dataset
+dataset=join(aggTran,dataset,type='inner',by='msno')
+dataset=join(members,d,type='inner',by='msno')
+dataset=join(dataset,train,type='inner',by='msno')
+
+df=join(df,d1,type='inner',by='msno')
+df=join(df,d2,type='inner',by='msno')
+names(df)[23]='count of transactions'
+
+#save copy of data set
+save(dataset,file='datasetAgg.Rda')
+```
+
+##moving the date to proper format (factors and date time as required)
+```{r cache=TRUE}
+library('dplyr') 
+library('lubridate')
+
+df <- dataset %>% mutate(city=as.factor(city),
+                  registered_via = as.factor(registered_via),
+                  registration_init_time = ymd(registration_init_time),
+                  date = ymd(date),
+                  is_churn = as.factor(is_churn))
+
+str(df)
+```
+
+
+
+##remove gender feature as it has most of the records missing
+```{r cache=TRUE}
+dataset$gender = NULL
+
+#split the datetime columns into day of week, month , year 
+library(lubridate)
+df[,'log_weekDay']=wday(as.POSIXlt(df$date))
+df[,'log_year']=year(as.POSIXlt(df$date))
+df[,'log_month']=month(as.POSIXlt(df$date))
+df[,'log_date']=date(as.POSIXlt(df$date))
+
+df[,'reg_weekDay']=wday(as.POSIXlt(df$registration_init_time))
+df[,'reg_year']=year(as.POSIXlt(df$registration_init_time))
+df[,'reg_month']=month(as.POSIXlt(df$registration_init_time))
+df[,'reg_date']=date(as.POSIXlt(df$registration_init_time))
+
+df$date =NULL
+df$registration_init_time =NULL
+
+#save copy of the dataset
+save(df,file='dfEDA.Rda')
+
+str(df)
+```
+
+
+```{r cache=TRUE}
+#now that the reg_date and log_date has been split , we no longer require it
+#converting the remaining newly created columns to factors
+df$reg_date = NULL
+df$log_date = NULL
+
+df <- df %>%  mutate(reg_month=as.factor(reg_month),
+                  reg_year = as.factor(reg_year),
+                  reg_weekDay = as.factor(reg_weekDay),
+                  log_month = as.factor(log_month),
+                  log_year = as.factor(log_year),
+                  log_weekDay = as.factor(log_weekDay),
+                  is_cancel=as.factor(is_cancel))
+
+##dropping log_year and log_month as they don't change in the given dataset
+df$log_month = NULL
+df$log_year = NULL
+```
+
+##there are outliers in the form of age greater than 100 and less than 0 
+```{r cache=TRUE}
+#drop ages beyond 0-100
+(df %>% count(bd>0 & bd<100))
+
+#since more than half of the records have age beyond the specified limit
+#therefore dropping it
+
+```
+```{r cache=TRUE}
+#drop ages beyond 0-100
+df <- df %>% filter(bd>0 & bd<100)
+
+#dropping msno since we no more need it as the unique id for each customer
+df$msno = NULL
+
+rm(d1,d2)
+```
+
+```{r cache=TRUE}
+#splitting the dataframe into numeric and factor
+numericdf <- df[,which(sapply(df, is.numeric))]
+factordf <- df[,which(sapply(df, is.factor))]
+```
+
+#checking boxplot for the possible outliers
+```{r cache=TRUE}
+boxplot(numericdf$bd, main="bd")
+boxplot(numericdf$actual_amount_paid, main="actual_amount_paid")
+boxplot(numericdf$total_secs, main="total_secs")
+
+```
+#histogram shows the possible skewness
+```{r cache=TRUE}
+hist(numericdf$bd)
+hist(numericdf$actual_amount_paid)
+#hist(train$pickup_datetime)
+hist(numericdf$total_secs)
+```
+
+##checking correlation between features and dropping highly correlated features
+```{r cache=TRUE}
+highCorrVectNum = c()
+correlationsNumeric = cor(numericdf)
+for (i in colnames(correlationsNumeric)){
+  for (j in colnames(correlationsNumeric)){
+    
+      if ( abs(correlationsNumeric[i,j]) > 0.8 & i != j ) {
+       highCorrVectNum =  c(correlationsNumeric,cbind(i, "-" , j , ": " , correlationsNumeric[i,j]))
+        print(paste(i, "-" , j, ": ", correlationsNumeric[i,j]))
+      }
+    
+  }
+}
+```
+
+##Checking for skewness
+```{r cache=TRUE}
+
+numericdf$num_100 = NULL
+library(e1071)                    # load e1071
+
+for(i in 1:ncol(numericdf)){
+        if (abs(skewness(numericdf[,i]))>0.8){
+           
+          print(paste(colnames(numericdf)[i],skewness(numericdf[,i])))
+           
+        }
+}
+```
+#capping of outlier values to 95 and 5 percentile values will help control skewness to some extent
+```{r cache=TRUE}
+for (name in colnames(numericdf)){
+  
+  print(name)
+  
+  #print(numericdfMember[,name])
+x <- numericdf[,name]
+qnt <- quantile(x, probs=c(.25, .75), na.rm = T)
+caps <- quantile(x, probs=c(.05, .95), na.rm = T)
+H <- 1.5 * IQR(x, na.rm = T)
+x[x < (qnt[1] - H)] <- caps[1]
+x[x > (qnt[2] + H)] <- caps[2]
+numericdf[,name] = x
+
+}
+```
+
+##normalizing the features to make it more bell shaped
+```{r cache=TRUE}
+preProcValues <- preProcess(numericdf, method = c("YeoJohnson","scale","center"))
+dNums <- predict(preProcValues, numericdf)
+
+##check skewness again, should lie between -1 to 1
+
+for(i in 1:ncol(dNums)){
+        #if (abs(skewness(numericTrainNorm[,i]))>0.8){
+           
+          print(paste(colnames(dNums)[i],skewness(dNums[,i]))) 
+           
+       # }
+}
+
+
+```
+```{r cache=TRUE}
+factorColumnsIndex = which(sapply(factordf, is.factor))
+
+#one hot encoding
+df_dummy <- fastDummies::dummy_cols(factordf[,-3], remove_first_dummy = TRUE)
+
+#dropping the columns that were already encoded
+df_dummy = df_dummy[,-setdiff(factorColumnsIndex,3)]
+df_dummy$log_weekDay = NULL
+
+modelDf = cbind(dNums,df_dummy)
+modelDf =cbind(modelDf,factordf$is_churn)
+
+names(modelDf)[76]='is_churn'
+
+save(modelDf,file='modelDf')
+```
+
+##removing features with near zero variance reduces the auc by 6% therefore skipping this step
+```{r cache=TRUE}
+#nzvdffactordf_dummy <- nearZeroVar(modelDf[,(1:ncol(modelDf))], uniqueCut=10)
+#modelDf = modelDf[,-nzvdffactordf_dummy]
+```
+
+##splitting the data into train and test,cv
+```{r cache=TRUE}
+rm(factordf,dNums,df_dummy,numericdf,preProcValues,transaction)
+rm(correlationsNumeric)
+
+#correcting the name of column
+names(modelDf)[10]='count_of_transactions'
+
+set.seed(1900)
+library(caret)
+inTrain <- createDataPartition(y = modelDf$is_churn, p = .6, list = F)
+trainData <- modelDf[inTrain,]
+testcvData <- modelDf[-inTrain,]
+inTest <- createDataPartition(y = modelDf$is_churn, p = .5, list = F)
+testData <- testcvData[inTest,]
+cvData <- testcvData[-inTest,]
+
+rm(inTrain, inTest, testcvData)
+
+```
+
+##train using random forest
+```{r cache=TRUE}
+library(randomForest)
+
+train.rf = randomForest(is_churn ~ ., data=trainData ,ntree=100, importance=TRUE)
+train.rf
+```
+
+##plotting the auc curve for random forest AUC = 0.856
+```{r cache=TRUE}
+
+predictionstest <- predict(object=train.rf, testData[,1:75], type='prob')
+library(pROC)
+auc <- roc(testData[,76], predictionstest[,1])
+print(auc$auc)
+plot(auc)
+
+```
+
+
+```{r cache=TRUE}
+#to find ROC
+predictionsProb <- predict(object=train.rf, testData[,1:75], type='prob')
+
+#install.packages("pROC")
+
+predictionsProb[[2]]
+library(pROC)
+auc <- roc(testData[,76], predictionsProb[,2])
+print(auc$auc)
+plot(auc)
+```
+
+
+#using XGBoost to train the model
+```{r cache=TRUE}
+library(Matrix)
+library(xgboost)
+train <- Matrix(as.matrix(trainData), sparse = TRUE)
+#train_smote <- Matrix(as.matrix(train_smote), sparse = TRUE)
+test <- Matrix(as.matrix(testData), sparse = TRUE)
+cv <- Matrix(as.matrix(cvData), sparse = TRUE)
+i=which(names(modelDf)=='is_churn')
+# Create XGB Matrices
+train_xgb <- xgb.DMatrix(data = train[,-i], label = train[,i])
+#train_smote_xgb <- xgb.DMatrix(data = train_smote[,-i], label = train_smote[,i])
+test_xgb <- xgb.DMatrix(data = test[,-i], label = test[,i])
+cv_xgb <- xgb.DMatrix(data = cv[,-i], label = cv[,i])
+```
+
+#finding the best parameter using cross validation and iteration for XGB
+```{r cache=TRUE}
+best_param = list()
+best_seednumber = 1234
+best_auc = 0
+best_auc_index = 0
+
+for (iter in 1:5) {
+     param <- list(objective = "binary:logistic",
+          eval_metric = "auc",
+          max_depth = sample(6:10, 1),
+          eta = runif(1, .01, .3),
+          gamma = runif(1, 0.0, 0.2),
+          subsample = runif(1, .6, .9),
+          colsample_bytree = runif(1, .5, .8),
+          min_child_weight = sample(1:40, 1),
+          max_delta_step = sample(1:10, 1)
+          )
+    cv.nround = 20
+    cv.nfold = 5
+    seed.number = sample.int(10000, 1)[[1]]
+    set.seed(seed.number)
+    mdcv <- xgb.cv(data=train_xgb, params = param, nthread=6,
+                    nfold=cv.nfold, nrounds=cv.nround,
+                    verbose = T, early.stopping.round=8, maximize=FALSE)
+
+    max_auc = max(mdcv$evaluation_log$test_auc_mean)
+    max_auc_index = which.max(mdcv$evaluation_log$test_auc_mean)
+
+    if (max_auc > best_auc) {
+        best_auc = max_auc
+        best_auc_index = max_auc_index
+        best_seednumber = seed.number
+        best_param = param
+    }
+}
+
+
+```
+
+#training the XGB model using best available parameters
+```{r cache=TRUE}
+nround = best_auc_index
+set.seed(best_seednumber)
+md <- xgb.train(data=train_xgb, params=best_param, nrounds=nround, nthread=6)
+```
+
+#setting threshold to 0.5 and then training the determining the F1 score and auc
+# "AUC of XGBoost on test set is: 0.868388511728122"
+# "F1 of XGBoost on test set is: 0.958485001358221"
+
+```{r cache=TRUE}
+q <-  0.5
+xgb.predict <- predict(md, test_xgb)
+xgb.predictboolean <- ifelse(xgb.predict >= q,1,0)  
+roc <- roc(testData[,i], predict(md, test_xgb, type = "prob"))
+xgb.cm <- confusionMatrix(as.factor(xgb.predictboolean), as.factor(test[,i]))
+xgb.cm$table
+print(paste("AUC of XGBoost is:",roc$auc))
+print(paste("F1 of XGBoost is:", xgb.cm$byClass["F1"]))
+xgb.cm$byClass
+```
+#checking the same for train set as well
+#[1] "AUC of XGBoost on train set is: 0.879381918230286"
+#[1] "F1 of XGBoost on train is: 0.959049821207092"
+#the model is not overfit      
+```{r cache=TRUE}
+q <-  0.5
+xgb.predict <- predict(md, train_xgb)
+xgb.predictboolean <- ifelse(xgb.predict >= q,1,0)  
+roc <- roc(trainData[,i], predict(md, train_xgb, type = "prob"))
+xgb.cm <- confusionMatrix(as.factor(xgb.predictboolean), as.factor(train[,i]))
+xgb.cm$table
+print(paste("AUC of XGBoost on train set is:",roc$auc))
+print(paste("F1 of XGBoost on train is:", xgb.cm$byClass["F1"]))
+xgb.cm$byClass
+```
+
+##plotting variable importance as determined from the importance matrix
+```{r cache=TRUE}
+cat("Feature importance")
+names <- dimnames(trainData)[[2]]
+importance_matrix <- xgb.importance(names, model=md)
+xgb.plot.importance(importance_matrix)
+```
+## Importance of variables in descending order 
+actual_amount_paid	
+is_cancel_1
+count_of_transactions
+registered_via_7
+bd
+count_of_logs
+num_unq
+```{r cache=TRUE}
+importance_matrix
+```
+#using gradient boosting model
+#accuracy is 0.921
+#auc=0.79
+            Sensitivity : 0.9943        
+            Specificity : 0.1859        
+         Pos Pred Value : 0.9246        
+         Neg Pred Value : 0.7644        
+             Prevalence : 0.9094        
+         Detection Rate : 0.9042        
+   Detection Prevalence : 0.9780        
+      Balanced Accuracy : 0.5901 
+```{r cache=TRUE}
+objControl <- trainControl(method='cv', number=3, returnResamp='none')
+objModel <- train(trainData[,-76], as.factor(trainData[,76]), method='glmnet',metric = "AUC", trControl=objControl)
+predictionsProb <- predict(object=objModel, testData[,-76],type='prob')
+predictions <- predict(object=objModel, testData[,-76])
+
+
+confusionMatrix(predictions,testData[,76]) 
+auc <- roc(testData[,'is_churn'], predictionsProb[,1])
+print(auc$auc)
+plot(auc)
+```
+
+#using Naive Bayes classifier
+##Accuracy : 0.8812  
+##AUC=0.7297
+         Reference
+Prediction     0     1
+         0 58602  4535
+         1  3592  1663
+                                          
+               Accuracy : 0.8812          
+                 95% CI : (0.8787, 0.8836)
+    No Information Rate : 0.9094          
+    P-Value [Acc > NIR] : 1               
+                                          
+                  Kappa : 0.226           
+ Mcnemar's Test P-Value : <2e-16          
+                                          
+            Sensitivity : 0.9422          
+            Specificity : 0.2683          
+         Pos Pred Value : 0.9282          
+         Neg Pred Value : 0.3165          
+             Prevalence : 0.9094          
+         Detection Rate : 0.8569          
+   Detection Prevalence : 0.9232          
+      Balanced Accuracy : 0.6053     
+```{r cache=TRUE}
+library(e1071)
+
+Naive_Bayes_Model=naiveBayes(is_churn ~., data=trainData)
+#What does the model say? Print the model summary
+Naive_Bayes_Model
+```
+```{r}
+NB_Predictions=predict(Naive_Bayes_Model,testData[,-76])
+NB_PredictionsProb=predict(Naive_Bayes_Model,testData[,-76],type='raw')
+#Confusion matrix to check accuracy
+table(NB_Predictions,testData[,76])
+confusionMatrix(NB_Predictions,testData[,76])
+
+```
+
+```{r cache=TRUE}
+NB_Predictions
+auc <- roc(testData[,'is_churn'], NB_PredictionsProb[,1])
+print(auc$auc)
+plot(auc)
+```
