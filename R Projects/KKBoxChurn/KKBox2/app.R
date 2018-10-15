@@ -14,8 +14,6 @@ library(ggplot2)
 library(e1071)
 
 
-#install.packages('ggvis')\
-
 setwd("C:\\Users\\conne\\Desktop\\KKBoxShinyApp\\KKBox2")
 
 load('database')
@@ -38,17 +36,11 @@ load('Naive_Bayes_Model')
                     sliderInput("amountPaid", "Average Amount Paid", 0, 2000, c(25, 40), pre = "$"),
                     br(),br(),
                     sliderInput("uniquesongs", "Number of Unique Songs Played", 0, 1500, c(25, 40))
-                  # radioButtons("registeredVia", "Product type",
-                   #              choices = c("1", "2", "3", "4"),
-                  #               selected = "1"),
-                   # selectInput("isCancel", "Country",
-                  #              choices = c("1", "2", "3"))
                   )),
                   mainPanel(
                     plotOutput("coolplot"),
                     br(),br(),
                     plotOutput("coolplot2")
-                    #ggvisOutput("plot1")
                   )
                
       ),
@@ -70,11 +62,6 @@ load('Naive_Bayes_Model')
                    tags$style(type='text/css', '#value {color: blue;font-size: 20px;text-align: center}'), 
                    
                    verbatimTextOutput("value"))
-                 # sliderInput("amountPaid",
-                 #             h2("Amount Paid by Subscriber",
-                 #                style = "font-family:Courier;text-align:center"),
-                 #             value=50,min=1,max=400,step=10)
-                 # 
                  
                ),br(),br(),
                mainPanel(
@@ -128,15 +115,6 @@ load('Naive_Bayes_Model')
                                   
                                  )
                           ),br(),br()
-                          # ,wellPanel(
-                          #           actionButton("go", "Predict!", 
-                          #                        style="display:inline-block;width:100%;text-align: center; font-size: 20px"),
-                          #           br(),br(),
-                          #           h2("Churn Chances", style="display:inline-block;width:100%;text-align: center;font-size: 20px"),
-                          #          
-                          #           tags$style(type='text/css', '#value {color: blue;font-size: 20px;text-align: center}'), 
-                          #           
-                          #           verbatimTextOutput("value"))
                 )
                )
     ))
@@ -177,8 +155,6 @@ load('Naive_Bayes_Model')
              y="Number of Unique Songs", 
              x="Average Amount Paid", 
              title="Scatterplot")
- #     ggplot(data, aes(num_unq)) +
-#        geom_histogram()
     })
     
     output$value <- renderText({
